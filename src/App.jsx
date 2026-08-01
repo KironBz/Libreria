@@ -7,6 +7,8 @@ import SearchBar from './components/SearchBar'
 import MateriaCard from './components/MateriaCard'
 import LibroModal from './components/LibroModal'
 
+const STORAGE_KEY = 'biblioteca_data'
+
 export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [loading, setLoading] = useState(false)
@@ -18,14 +20,13 @@ export default function App() {
   const [error, setError] = useState('')
   const [user, setUser] = useState(null)
 
-  // Verificar autenticación al cargar
   useEffect(() => {
     const checkAuth = async () => {
       try {
         if (githubService.token) {
           const userInfo = await githubService.getAuthenticatedUser()
           setUser(userInfo)
-          await loadData()
+          loadLocalData()
           setIsAuthenticated(true)
         }
       } catch (err) {
@@ -37,16 +38,25 @@ export default function App() {
     checkAuth()
   }, [])
 
-  // Cargar datos del Gist
-  const loadData = async () => {
+  const loadLocalData = () => {
     try {
-      setLoading(true)
-      setError('')
-      const gistData = await githubService.getData()
-      setData(gistData)
+      const stored = localStorage.getItem(STORAGE_KEY)
+      if (stored) {
+        setData(JSON.parse(stored))
+      } else {
+        const initialData = {
+          metadata: {
+            version: '1.0',
+            lastUpdate: new Date().toISOString()
+          },
+          materias: githubService.getMaterias(),
+          libros: []
+        }
+        setData(initialData)
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(initialData))
+      }
     } catch (err) {
-      // Inicializar con datos vacíos si falla
-      console.warn('Error cargando datos, inicializando vacío:', err)
+      console.error('Error cargando datos:', err)
       setData({
         metadata: {
           version: '1.0',
@@ -55,13 +65,18 @@ export default function App() {
         materias: githubService.getMaterias(),
         libros: []
       })
-      setError('Nota: Tu biblioteca se iniciará vacía. Los cambios se guardarán automáticamente.')
-    } finally {
-      setLoading(false)
     }
   }
 
-  // Login
+  const saveData = (newData) => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(newData))
+    setData(newData)
+    
+    if (githubService.token) {
+      githubService.syncToGist(newData)
+    }
+  }
+
   const handleLogin = async (token) => {
     try {
       setLoading(true)
@@ -71,7 +86,7 @@ export default function App() {
       const userInfo = await githubService.getAuthenticatedUser()
       setUser(userInfo)
       
-      await loadData()
+      loadLocalData()
       setIsAuthenticated(true)
     } catch (err) {
       githubService.clearAuth()
@@ -82,7 +97,6 @@ export default function App() {
     }
   }
 
-  // Logout
   const handleLogout = () => {
     if (confirm('¿Estás seguro de que quieres salir?')) {
       githubService.clearAuth()
@@ -92,7 +106,6 @@ export default function App() {
     }
   }
 
-  // Agregar/Editar libro
   const handleSaveLibro = async (formData) => {
     try {
       setLoading(true)
@@ -101,12 +114,10 @@ export default function App() {
       let updatedLibros = [...data.libros]
 
       if (editingLibro) {
-        // Editar
         updatedLibros = updatedLibros.map(l =>
           l.id === editingLibro.id ? formData : l
         )
       } else {
-        // Agregar
         if (updatedLibros.some(l => l.id === formData.id)) {
           setError('Ya existe un libro con ese ID')
           setLoading(false)
@@ -116,8 +127,7 @@ export default function App() {
       }
 
       const updatedData = { ...data, libros: updatedLibros }
-      await githubService.updateData(updatedData)
-      setData(updatedData)
+      saveData(updatedData)
       
       setModalOpen(false)
       setEditingLibro(null)
@@ -129,8 +139,7 @@ export default function App() {
     }
   }
 
-  // Eliminar libro
-  const handleDeleteLibro = async (libroId) => {
+  const handleDeleteLibro = (libroId) => {
     try {
       setLoading(true)
       setError('')
@@ -138,8 +147,7 @@ export default function App() {
       const updatedLibros = data.libros.filter(l => l.id !== libroId)
       const updatedData = { ...data, libros: updatedLibros }
       
-      await githubService.updateData(updatedData)
-      setData(updatedData)
+      saveData(updatedData)
     } catch (err) {
       setError(err.message || 'Error eliminando libro')
       console.error(err)
@@ -148,19 +156,17 @@ export default function App() {
     }
   }
 
-  // Filtrar materias
   const materiasAMostrar = selectedMateria
     ? data.materias.filter(m => m.id === selectedMateria)
     : data.materias
 
-  // Filtrar libros por búsqueda
   const librosFiltered = data.libros.filter(libro => {
     const searchLower = searchTerm.toLowerCase()
     return (
       libro.titulo.toLowerCase().includes(searchLower) ||
       libro.autor.toLowerCase().includes(searchLower) ||
       libro.id.includes(searchTerm) ||
-      libro.notas.toLowerCase().includes(searchLower)
+      (libro.notas || '').toLowerCase().includes(searchLower)
     )
   })
 
@@ -170,7 +176,6 @@ export default function App() {
 
   return (
     <div className="min-h-screen bg-gray-50">
-      {/* Header */}
       <header className="bg-gradient-to-r from-primary-600 via-primary-500 to-secondary-600 text-white shadow-lg">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
           <div className="flex items-center justify-between">
@@ -199,14 +204,60 @@ export default function App() {
               >
                 <LogOut className="w-5 h-5" />
               </button>
+
+
+                <button
+                  onClick={() => {
+                    const data = localStorage.getItem(STORAGE_KEY)
+                    const element = document.createElement('a')
+                    element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(data))
+                    element.setAttribute('download', 'biblioteca-backup.json')
+                    element.style.display = 'none'
+                    document.body.appendChild(element)
+                    element.click()
+                    document.body.removeChild(element)
+                  }}
+                  className="text-white hover:bg-white hover:bg-opacity-20 px-3 py-2 rounded-lg transition-colors text-sm"
+                  title="Descargar backup"
+                >
+                  📥
+                </button>
+
+                <button
+                  onClick={() => {
+                    const input = document.createElement('input')
+                    input.type = 'file'
+                    input.accept = '.json'
+                    input.onchange = (e) => {
+                      const file = e.target.files[0]
+                      const reader = new FileReader()
+                      reader.onload = (event) => {
+                        try {
+                          const imported = JSON.parse(event.target.result)
+                          localStorage.setItem(STORAGE_KEY, JSON.stringify(imported))
+                          setData(imported)
+                          setError('')
+                        } catch (err) {
+                          setError('Archivo JSON inválido')
+                        }
+                      }
+                      reader.readAsText(file)
+                    }
+                    input.click()
+                  }}
+                  className="text-white hover:bg-white hover:bg-opacity-20 px-3 py-2 rounded-lg transition-colors text-sm"
+                  title="Restaurar desde backup"
+                >
+                  📤
+              </button>
+
+
             </div>
           </div>
         </div>
       </header>
 
-      {/* Main Content */}
       <main className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Error */}
         {error && (
           <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4 flex gap-3">
             <AlertCircle className="w-5 h-5 text-red-600 flex-shrink-0 mt-0.5" />
@@ -223,12 +274,10 @@ export default function App() {
           </div>
         )}
 
-        {/* Dashboard */}
         {!loading && data.libros.length > 0 && (
           <Dashboard data={data} materias={data.materias} />
         )}
 
-        {/* Search & Filter */}
         <SearchBar
           searchTerm={searchTerm}
           onSearchChange={setSearchTerm}
@@ -237,7 +286,6 @@ export default function App() {
           materias={data.materias}
         />
 
-        {/* Loading */}
         {loading && (
           <div className="text-center py-12">
             <div className="inline-block">
@@ -247,7 +295,6 @@ export default function App() {
           </div>
         )}
 
-        {/* No results */}
         {!loading && librosFiltered.length === 0 && data.libros.length > 0 && (
           <div className="text-center py-12">
             <p className="text-gray-500 text-lg">No se encontraron libros</p>
@@ -255,7 +302,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Materias Grid */}
         {!loading && librosFiltered.length > 0 && (
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
             {materiasAMostrar.map(materia => (
@@ -274,7 +320,6 @@ export default function App() {
           </div>
         )}
 
-        {/* Empty state */}
         {!loading && data.libros.length === 0 && (
           <div className="text-center py-12">
             <BookOpen className="w-16 h-16 text-gray-300 mx-auto mb-4" />
@@ -290,7 +335,6 @@ export default function App() {
         )}
       </main>
 
-      {/* Modal */}
       <LibroModal
         isOpen={modalOpen}
         onClose={() => {

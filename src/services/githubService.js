@@ -26,44 +26,76 @@ class GitHubService {
     return await response.json()
   }
 
+  async syncToGist(data) {
+    if (!this.token) return
+
+    try {
+      if (!this.gistId) {
+        await this.getOrCreateGist()
+      }
+
+      const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
+        method: 'PATCH',
+        headers: {
+          'Authorization': `token ${this.token}`,
+          'Accept': 'application/vnd.github.v3+json',
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({
+          files: {
+            [GIST_FILENAME]: {
+              content: JSON.stringify({
+                ...data,
+                metadata: {
+                  ...data.metadata,
+                  lastUpdate: new Date().toISOString()
+                }
+              }, null, 2)
+            }
+          }
+        })
+      })
+
+      if (response.ok) {
+        console.log('✓ Sincronizado al Gist')
+      }
+    } catch (err) {
+      console.warn('No se pudo sincronizar al Gist (funcionando offline):', err)
+    }
+  }
+
   async getOrCreateGist() {
     if (this.gistId) {
       try {
-        return await this.getGist(this.gistId)
+        const gist = await this.getGist(this.gistId)
+        return gist
       } catch (e) {
-        console.warn('Gist previo no accesible, creando uno nuevo...')
         this.gistId = null
       }
     }
 
-    // Buscar gist existente por descripción
     try {
-      const existingGist = await this.findGistByDescription()
-      if (existingGist) {
-        this.gistId = existingGist.id
-        localStorage.setItem('gist_id', this.gistId)
-        return existingGist
+      const response = await fetch('https://api.github.com/user/gists', {
+        headers: {
+          'Authorization': `token ${this.token}`,
+          'Accept': 'application/vnd.github.v3+json'
+        }
+      })
+
+      if (response.ok) {
+        const gists = await response.json()
+        const existing = gists.find(g => g.description === GIST_DESCRIPTION)
+        if (existing) {
+          this.gistId = existing.id
+          localStorage.setItem('gist_id', this.gistId)
+          return existing
+        }
       }
     } catch (e) {
-      console.warn('No se pudo buscar gists existentes, creando uno nuevo...')
+      console.warn('No se pudo buscar gists existentes')
     }
 
-    // Crear gist nuevo
     return await this.createGist()
-  }
-
-  async findGistByDescription() {
-    const response = await fetch('https://api.github.com/user/gists', {
-      headers: {
-        'Authorization': `token ${this.token}`,
-        'Accept': 'application/vnd.github.v3+json'
-      }
-    })
-
-    if (!response.ok) throw new Error('Error obteniendo gists')
-    const gists = await response.json()
-    
-    return gists.find(g => g.description === GIST_DESCRIPTION)
   }
 
   async createGist() {
@@ -112,42 +144,6 @@ class GitHubService {
     })
 
     if (!response.ok) throw new Error('Error obteniendo gist')
-    return await response.json()
-  }
-
-  async getData() {
-    const gist = await this.getOrCreateGist()
-    const file = gist.files[GIST_FILENAME]
-    
-    if (!file) throw new Error('Archivo no encontrado en gist')
-    
-    return JSON.parse(file.content)
-  }
-
-  async updateData(data) {
-    const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
-      method: 'PATCH',
-      headers: {
-        'Authorization': `token ${this.token}`,
-        'Accept': 'application/vnd.github.v3+json',
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        files: {
-          [GIST_FILENAME]: {
-            content: JSON.stringify({
-              ...data,
-              metadata: {
-                ...data.metadata,
-                lastUpdate: new Date().toISOString()
-              }
-            }, null, 2)
-          }
-        }
-      })
-    })
-
-    if (!response.ok) throw new Error('Error actualizando gist')
     return await response.json()
   }
 
