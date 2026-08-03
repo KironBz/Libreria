@@ -1,6 +1,3 @@
-const GIST_FILENAME = 'biblioteca-mecatronica.json'
-const GIST_DESCRIPTION = 'Biblioteca Digital Mecatrónica UNAM'
-
 class GitHubService {
   constructor() {
     this.token = localStorage.getItem('github_token') || null
@@ -17,7 +14,7 @@ class GitHubService {
     
     const response = await fetch('https://api.github.com/user', {
       headers: {
-        'Authorization': `token ${this.token}`,
+        'Authorization': `Bearer ${this.token}`,
         'Accept': 'application/vnd.github.v3+json'
       }
     })
@@ -28,29 +25,20 @@ class GitHubService {
 
   async syncToGist(data) {
     if (!this.token) return
+    if (!this.gistId) return
 
     try {
-      if (!this.gistId) {
-        await this.getOrCreateGist()
-      }
-
       const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
         method: 'PATCH',
         headers: {
-          'Authorization': `token ${this.token}`,
+          'Authorization': `Bearer ${this.token}`,
           'Accept': 'application/vnd.github.v3+json',
           'Content-Type': 'application/json'
         },
         body: JSON.stringify({
           files: {
-            [GIST_FILENAME]: {
-              content: JSON.stringify({
-                ...data,
-                metadata: {
-                  ...data.metadata,
-                  lastUpdate: new Date().toISOString()
-                }
-              }, null, 2)
+            'biblioteca-mecatronica.json': {
+              content: JSON.stringify(data, null, 2)
             }
           }
         })
@@ -58,93 +46,69 @@ class GitHubService {
 
       if (response.ok) {
         console.log('✓ Sincronizado al Gist')
+        return true
       }
     } catch (err) {
-      console.warn('No se pudo sincronizar al Gist (funcionando offline):', err)
+      console.warn('Sync fallido (offline ok):', err.message)
     }
+    return false
   }
 
-  async getOrCreateGist() {
-    if (this.gistId) {
-      try {
-        const gist = await this.getGist(this.gistId)
-        return gist
-      } catch (e) {
-        this.gistId = null
-      }
-    }
+  async createGist(data) {
+    if (!this.token) throw new Error('No token')
 
-    try {
-      const response = await fetch('https://api.github.com/user/gists', {
-        headers: {
-          'Authorization': `token ${this.token}`,
-          'Accept': 'application/vnd.github.v3+json'
-        }
-      })
-
-      if (response.ok) {
-        const gists = await response.json()
-        const existing = gists.find(g => g.description === GIST_DESCRIPTION)
-        if (existing) {
-          this.gistId = existing.id
-          localStorage.setItem('gist_id', this.gistId)
-          return existing
-        }
-      }
-    } catch (e) {
-      console.warn('No se pudo buscar gists existentes')
-    }
-
-    return await this.createGist()
-  }
-
-  async createGist() {
-    const initialData = {
-      metadata: {
-        version: '1.0',
-        lastUpdate: new Date().toISOString()
-      },
-      materias: this.getMaterias(),
-      libros: []
-    }
+    console.log('🔄 Creando Gist...')
 
     const response = await fetch('https://api.github.com/user/gists', {
       method: 'POST',
       headers: {
-        'Authorization': `token ${this.token}`,
+        'Authorization': `Bearer ${this.token}`,
         'Accept': 'application/vnd.github.v3+json',
         'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        description: GIST_DESCRIPTION,
+        description: 'Biblioteca Digital Mecatrónica UNAM',
         public: false,
         files: {
-          [GIST_FILENAME]: {
-            content: JSON.stringify(initialData, null, 2)
+          'biblioteca-mecatronica.json': {
+            content: JSON.stringify(data, null, 2)
           }
         }
       })
     })
 
-    if (!response.ok) throw new Error('Error creando gist')
-    
+    console.log(`Respuesta del servidor: ${response.status}`)
+
+    if (!response.ok) {
+      const error = await response.text()
+      console.error('Error creando Gist:', error)
+      throw new Error(`Error ${response.status}: ${error}`)
+    }
+
     const gist = await response.json()
     this.gistId = gist.id
     localStorage.setItem('gist_id', this.gistId)
-    
+    console.log('✓ Gist creado:', this.gistId)
     return gist
   }
 
-  async getGist(gistId) {
-    const response = await fetch(`https://api.github.com/gists/${gistId}`, {
+  async downloadFromGist() {
+    if (!this.gistId) throw new Error('No Gist ID')
+
+    const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
       headers: {
-        'Authorization': `token ${this.token}`,
+        'Authorization': `Bearer ${this.token}`,
         'Accept': 'application/vnd.github.v3+json'
       }
     })
 
-    if (!response.ok) throw new Error('Error obteniendo gist')
-    return await response.json()
+    if (!response.ok) throw new Error('Error descargando Gist')
+
+    const gist = await response.json()
+    const file = gist.files['biblioteca-mecatronica.json']
+    if (!file) throw new Error('Archivo no encontrado en Gist')
+
+    return JSON.parse(file.content)
   }
 
   getMaterias() {
