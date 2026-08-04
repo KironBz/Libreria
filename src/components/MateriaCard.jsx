@@ -7,7 +7,21 @@ export default function MateriaCard({
   onDeleteLibro,
   loading
 }) {
-  const librosEnMateria = libros.filter(l => l.materias.includes(materia.id))
+  const librosEnMateria = (libros || []).filter(l => l.materia === materia.nombre)
+
+  const handleDelete = (libro) => {
+    console.log('[MateriaCard] Intentando eliminar:', libro.titulo, libro.id)
+    
+    // Usar window.confirm
+    const confirmado = window.confirm(`¿Eliminar "${libro.titulo}"?`)
+    
+    if (confirmado) {
+      console.log('[MateriaCard] Confirmado, llamando a onDeleteLibro')
+      onDeleteLibro(libro.id)
+    } else {
+      console.log('[MateriaCard] Eliminación cancelada')
+    }
+  }
 
   return (
     <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow overflow-hidden">
@@ -90,11 +104,7 @@ export default function MateriaCard({
                       <Edit2 className="w-4 h-4" />
                     </button>
                     <button
-                      onClick={() => {
-                        if (confirm(`¿Eliminar "${libro.titulo}"?`)) {
-                          onDeleteLibro(libro.id)
-                        }
-                      }}
+                      onClick={() => handleDelete(libro)}
                       disabled={loading}
                       className="p-2 text-gray-500 hover:text-red-600 hover:bg-red-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Eliminar"
