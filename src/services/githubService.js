@@ -174,7 +174,7 @@ class GitHubService {
     }
 
     const gistData = {
-      description: 'Biblioteca Digital Mecatrónica UNAM',
+      description: 'Biblioteca Digital Mecatrónica',
       public: false,
       files: {
         [GIST_FILENAME]: {

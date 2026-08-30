@@ -767,7 +767,7 @@ const librosPorMateria = useMemo(() => {
             <div>
               <h1 className="text-3xl font-bold">📚 Biblioteca Mecatrónica</h1>
               <div className="flex items-center gap-2 mt-1 text-sm opacity-90 flex-wrap">
-                <span>UNAM • {user?.login}</span>
+                <span> • {user?.login}</span>
                 {uiState.syncing && (
                   <span className="flex items-center gap-1">
                     <div className="w-2 h-2 bg-yellow-300 rounded-full animate-pulse" />
