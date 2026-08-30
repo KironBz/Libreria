@@ -1,10 +1,11 @@
 import { useEffect, useState, useCallback, useMemo, useRef } from 'react'
-import { LogOut, Plus, AlertCircle, BookOpen, CheckCircle, AlertTriangle, RefreshCw } from 'lucide-react'
+import { LogOut, Plus, AlertCircle, BookOpen, CheckCircle, AlertTriangle, RefreshCw, Book, Grid } from 'lucide-react'
 import githubService from './services/githubService'
 import LoginScreen from './components/LoginScreen'
 import Dashboard from './components/Dashboard'
 import SearchBar from './components/SearchBar'
 import MateriaCard from './components/MateriaCard'
+import TematicaCard from './components/TematicaCard'
 import LibroModal from './components/LibroModal'
 
 const STORAGE_KEY = 'biblioteca_data'
@@ -19,6 +20,7 @@ const getInitialData = () => ({
     syncStatus: 'idle'
   },
   materias: githubService.getMaterias(),
+  tematicas: githubService.getTematicas(),
   libros: []
 })
 
@@ -27,13 +29,15 @@ export default function App() {
   const [isAuthenticated, setIsAuthenticated] = useState(false)
   const [user, setUser] = useState(null)
 
-  // Estado de Datos (núcleo) - SIEMPRE tiene materias
+  // Estado de Datos (núcleo) - SIEMPRE tiene materias y temáticas
   const [data, setData] = useState(getInitialData)
 
   // Estado de UI
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedMateria, setSelectedMateria] = useState(null)
+  const [selectedTematica, setSelectedTematica] = useState(null)
   const [modalOpen, setModalOpen] = useState(false)
+  const [modalTipo, setModalTipo] = useState('carrera')
   const [editingLibro, setEditingLibro] = useState(null)
   const [mostrarVacias, setMostrarVacias] = useState(false)
 
@@ -47,11 +51,9 @@ export default function App() {
     conflictCount: 0
   })
 
-  // useRef para debounce persistente
   const syncTimeoutRef = useRef(null)
   const isMountedRef = useRef(true)
 
-  // Limpiar timeouts en unmount
   useEffect(() => {
     isMountedRef.current = true
     return () => {
@@ -62,7 +64,6 @@ export default function App() {
     }
   }, [])
 
-  // Debounce con useRef
   const debouncedSync = useCallback((callback) => {
     if (syncTimeoutRef.current) {
       clearTimeout(syncTimeoutRef.current)
@@ -86,9 +87,12 @@ export default function App() {
         throw new Error('Estructura inválida: libros no es array')
       }
 
-      // Validar que materias exista o crearla
       if (!Array.isArray(dataToValidate.materias)) {
         dataToValidate.materias = githubService.getMaterias()
+      }
+
+      if (!Array.isArray(dataToValidate.tematicas)) {
+        dataToValidate.tematicas = githubService.getTematicas()
       }
 
       for (let i = 0; i < dataToValidate.libros.length; i++) {
@@ -104,15 +108,18 @@ export default function App() {
           throw new Error(`Libro ${i}: autor requerido (string)`)
         }
         
-        // Validar materia
-        if (libro.materia && typeof libro.materia !== 'string') {
-          throw new Error(`Libro ${i}: materia debe ser string`)
+        if (libro.tipo && !['carrera', 'tematica'].includes(libro.tipo)) {
+          libro.tipo = 'carrera'
         }
         
-        // Convertir formato antiguo si existe
-        if (libro.materias && Array.isArray(libro.materias)) {
-          libro.materia = libro.materias[0] || ''
-          delete libro.materias
+        // Asegurar que materias sea array
+        if (!libro.materias) {
+          libro.materias = []
+        }
+        
+        // Asegurar que tematicas sea array
+        if (!libro.tematicas) {
+          libro.tematicas = []
         }
       }
 
@@ -130,20 +137,28 @@ export default function App() {
       if (stored) {
         let parsed = JSON.parse(stored)
         
-        // Asegurar que materias existe
         if (!parsed.materias || !Array.isArray(parsed.materias)) {
           parsed.materias = githubService.getMaterias()
         }
         
-        // Convertir libros antiguos
+        if (!parsed.tematicas || !Array.isArray(parsed.tematicas)) {
+          parsed.tematicas = githubService.getTematicas()
+        }
+        
         if (parsed.libros && Array.isArray(parsed.libros)) {
           parsed.libros = parsed.libros.map(libro => {
-            if (libro.materias && Array.isArray(libro.materias) && !libro.materia) {
-              return {
-                ...libro,
-                materia: libro.materias[0] || '',
-                materias: undefined
-              }
+            if (!libro.tipo) {
+              libro.tipo = 'carrera'
+            }
+            if (!libro.materias) {
+              libro.materias = []
+            }
+            if (!libro.tematicas) {
+              libro.tematicas = []
+            }
+            // Si el libro tiene tematicas pero no tipo, asignar tematica
+            if (libro.tematicas && libro.tematicas.length > 0 && libro.tipo === 'carrera') {
+              libro.tipo = 'tematica'
             }
             return libro
           })
@@ -196,13 +211,13 @@ export default function App() {
   const saveData = useCallback(
     async (newData, options = { skipSync: false }) => {
       try {
-        // Asegurar que materias siempre exista
-        const dataWithMaterias = {
+        const dataWithCatalogos = {
           ...newData,
-          materias: newData.materias || githubService.getMaterias()
+          materias: newData.materias || githubService.getMaterias(),
+          tematicas: newData.tematicas || githubService.getTematicas()
         }
         
-        const validation = validateDataIntegrity(dataWithMaterias)
+        const validation = validateDataIntegrity(dataWithCatalogos)
         if (!validation.valid) {
           setUiState(prev => ({
             ...prev,
@@ -214,9 +229,9 @@ export default function App() {
 
         const timestamp = new Date().toISOString()
         const dataWithMetadata = {
-          ...dataWithMaterias,
+          ...dataWithCatalogos,
           metadata: {
-            ...dataWithMaterias.metadata,
+            ...dataWithCatalogos.metadata,
             lastUpdate: timestamp,
             syncStatus: options.skipSync ? 'idle' : 'syncing'
           }
@@ -235,9 +250,10 @@ export default function App() {
                 const syncResult = await githubService.smartSync(dataWithMetadata)
                 
                 if (isMountedRef.current) {
-                  const mergedWithMaterias = {
+                  const mergedWithCatalogos = {
                     ...syncResult.merged,
                     materias: syncResult.merged.materias || githubService.getMaterias(),
+                    tematicas: syncResult.merged.tematicas || githubService.getTematicas(),
                     metadata: {
                       ...syncResult.merged.metadata,
                       lastSyncTime: new Date().toISOString(),
@@ -245,7 +261,7 @@ export default function App() {
                     }
                   }
                   
-                  setData(mergedWithMaterias)
+                  setData(mergedWithCatalogos)
 
                   if (syncResult.hasConflicts && syncResult.conflicts) {
                     setUiState(prev => ({
@@ -319,6 +335,7 @@ export default function App() {
         const mergedData = {
           ...syncResult.merged,
           materias: githubService.getMaterias(),
+          tematicas: githubService.getTematicas(),
           metadata: {
             ...syncResult.merged.metadata,
             lastSyncTime: new Date().toISOString(),
@@ -327,6 +344,8 @@ export default function App() {
         }
         
         console.log('[App] Materias cargadas:', mergedData.materias.length)
+        console.log('[App] Temáticas cargadas:', mergedData.tematicas.length)
+        console.log('[App] Libros cargados:', mergedData.libros.length)
         
         setData(mergedData)
         setIsAuthenticated(true)
@@ -393,6 +412,10 @@ export default function App() {
           }
           libroToSave.id = id
         }
+
+        // Asegurar que materias y tematicas sean arrays
+        if (!libroToSave.materias) libroToSave.materias = []
+        if (!libroToSave.tematicas) libroToSave.tematicas = []
 
         if (editingLibro) {
           updatedLibros = updatedLibros.map(l =>
@@ -487,70 +510,164 @@ export default function App() {
   )
 
   // ============================================
-  // FILTRADO MEJORADO - OCULTAR MATERIAS VACÍAS
+  // FILTRADO MEJORADO - CORREGIDO
   // ============================================
 
-  // 1. Filtrar libros por término de búsqueda
-  const librosFiltered = useMemo(() => {
-    if (!searchTerm.trim()) {
-      return data.libros
-    }
-    const searchLower = searchTerm.toLowerCase()
-    return data.libros.filter(libro => {
-      return (
-        libro.titulo.toLowerCase().includes(searchLower) ||
-        libro.autor.toLowerCase().includes(searchLower) ||
-        libro.id.toLowerCase().includes(searchLower) ||
-        (libro.notas || '').toLowerCase().includes(searchLower)
-      )
-    })
-  }, [data.libros, searchTerm])
 
-  // 2. Agrupar libros por materia (con filtro de búsqueda y materia seleccionada)
-  const librosPorMateriaFiltrados = useMemo(() => {
-    let librosBase = librosFiltered
+  // ============================================
+// FILTRADO CON LOGS PARA DEPURACIÓN
+// ============================================
+
+// 1. Filtrar libros por término de búsqueda
+const librosFiltered = useMemo(() => {
+  console.log('[App] 🔍 Filtrando libros con searchTerm:', searchTerm)
+  if (!searchTerm.trim()) {
+    return data.libros
+  }
+  const searchLower = searchTerm.toLowerCase()
+  const filtered = data.libros.filter(libro => {
+    return (
+      libro.titulo.toLowerCase().includes(searchLower) ||
+      libro.autor.toLowerCase().includes(searchLower) ||
+      libro.id.toLowerCase().includes(searchLower) ||
+      (libro.isbn || '').toLowerCase().includes(searchLower) ||
+      (libro.editorial || '').toLowerCase().includes(searchLower) ||
+      (libro.palabras_clave || '').toLowerCase().includes(searchLower) ||
+      (libro.notas || '').toLowerCase().includes(searchLower)
+    )
+  })
+  console.log('[App] ✅ librosFiltered:', filtered.length, 'libros')
+  return filtered
+}, [data.libros, searchTerm])
+
+// 2. Libros de carrera vs temáticos
+const librosCarrera = useMemo(() => {
+  const filtered = librosFiltered.filter(libro => libro.tipo === 'carrera' || !libro.tipo)
+  console.log('[App] 📚 librosCarrera:', filtered.length)
+  return filtered
+}, [librosFiltered])
+
+const librosTematicos = useMemo(() => {
+  const filtered = librosFiltered.filter(libro => libro.tipo === 'tematica')
+  console.log('[App] 📖 librosTematicos:', filtered.length)
+  return filtered
+}, [librosFiltered])
+
+// 3. CORREGIDO: Agrupar libros de carrera por materia
+const librosPorMateria = useMemo(() => {
+  console.log('[App] 📊 Calculando librosPorMateria...')
+  console.log('[App] librosCarrera:', librosCarrera.length)
+  
+  if (librosCarrera.length === 0) {
+    console.log('[App] ⚠️ No hay libros de carrera')
+    const grupos = {}
+    data.materias.forEach(materia => {
+      grupos[materia.id] = []
+    })
+    return grupos
+  }
+  
+  console.log('[App] librosCarrera data:', librosCarrera.map(l => ({ 
+    titulo: l.titulo, 
+    materias: l.materias,
+    tipo: l.tipo 
+  })))
+  
+  let librosBase = librosCarrera
+  
+  if (selectedMateria) {
+    const materiaSeleccionada = data.materias.find(m => m.id === selectedMateria)
+    if (materiaSeleccionada) {
+      librosBase = librosBase.filter(libro => 
+        libro.materias && libro.materias.includes(materiaSeleccionada.nombre)
+      )
+      console.log(`[App] 🔍 Filtrado por materia: ${materiaSeleccionada.nombre}, quedan ${librosBase.length} libros`)
+    }
+  }
+  
+  const grupos = {}
+  data.materias.forEach(materia => {
+    const librosEnMateria = librosBase.filter(libro => 
+      libro.materias && libro.materias.includes(materia.nombre)
+    )
+    grupos[materia.id] = librosEnMateria
+    if (librosEnMateria.length > 0) {
+      console.log(`[App] 📚 Materia "${materia.nombre}" tiene ${librosEnMateria.length} libros:`, 
+        librosEnMateria.map(l => l.titulo))
+    }
+  })
+  
+  console.log('[App] ✅ librosPorMateria calculado')
+  return grupos
+}, [data.materias, librosCarrera, selectedMateria])
+
+
+
+  // 4. CORREGIDO: Agrupar libros temáticos por temática
+  const librosPorTematica = useMemo(() => {
+    let librosBase = librosTematicos
     
-    // Filtrar por materia seleccionada
-    if (selectedMateria) {
-      const materiaSeleccionada = data.materias.find(m => m.id === selectedMateria)
-      if (materiaSeleccionada) {
-        librosBase = librosBase.filter(libro => libro.materia === materiaSeleccionada.nombre)
+    // Filtrar por temática seleccionada
+    if (selectedTematica) {
+      const tematicaSeleccionada = data.tematicas.find(t => t.id === selectedTematica)
+      if (tematicaSeleccionada) {
+        librosBase = librosBase.filter(libro => 
+          libro.tematicas && libro.tematicas.includes(tematicaSeleccionada.nombre)
+        )
       }
     }
     
-    // Agrupar por materia
+    // Agrupar por temática
     const grupos = {}
-    data.materias.forEach(materia => {
-      grupos[materia.id] = librosBase.filter(libro => libro.materia === materia.nombre)
+    data.tematicas.forEach(tematica => {
+      grupos[tematica.id] = librosBase.filter(libro => 
+        libro.tematicas && libro.tematicas.includes(tematica.nombre)
+      )
     })
     return grupos
-  }, [data.materias, librosFiltered, selectedMateria])
+  }, [data.tematicas, librosTematicos, selectedTematica])
 
-  // 3. Materias a mostrar - SOLO CON LIBROS (a menos que sea filtro explícito)
+  // 5. Materias a mostrar
   const materiasAMostrar = useMemo(() => {
-    // Si hay una materia seleccionada, mostrarla siempre
     if (selectedMateria) {
       return data.materias.filter(m => m.id === selectedMateria)
     }
     
-    // Si el usuario activó "mostrar vacías", mostrar todas
     if (mostrarVacias) {
       return data.materias
     }
     
-    // NORMAL: solo materias con libros
-    // Si hay búsqueda, solo materias con resultados
     if (searchTerm.trim()) {
       return data.materias.filter(m => 
-        librosPorMateriaFiltrados[m.id] && librosPorMateriaFiltrados[m.id].length > 0
+        librosPorMateria[m.id] && librosPorMateria[m.id].length > 0
       )
     }
     
-    // Sin búsqueda: solo materias con al menos 1 libro
     return data.materias.filter(m => 
-      (librosPorMateriaFiltrados[m.id] || []).length > 0
+      (librosPorMateria[m.id] || []).length > 0
     )
-  }, [data.materias, selectedMateria, searchTerm, librosPorMateriaFiltrados, mostrarVacias])
+  }, [data.materias, selectedMateria, searchTerm, librosPorMateria, mostrarVacias])
+
+  // 6. Temáticas a mostrar
+  const tematicasAMostrar = useMemo(() => {
+    if (selectedTematica) {
+      return data.tematicas.filter(t => t.id === selectedTematica)
+    }
+    
+    if (mostrarVacias) {
+      return data.tematicas
+    }
+    
+    if (searchTerm.trim()) {
+      return data.tematicas.filter(t => 
+        librosPorTematica[t.id] && librosPorTematica[t.id].length > 0
+      )
+    }
+    
+    return data.tematicas.filter(t => 
+      (librosPorTematica[t.id] || []).length > 0
+    )
+  }, [data.tematicas, selectedTematica, searchTerm, librosPorTematica, mostrarVacias])
 
   // Backup
   const handleDownloadBackup = useCallback(() => {
@@ -607,6 +724,7 @@ export default function App() {
       const mergedData = {
         ...syncResult.merged,
         materias: githubService.getMaterias(),
+        tematicas: githubService.getTematicas(),
         metadata: {
           ...syncResult.merged.metadata,
           syncStatus: syncResult.hasConflicts ? 'conflict' : 'success'
@@ -636,6 +754,10 @@ export default function App() {
   if (!isAuthenticated) {
     return <LoginScreen onLogin={handleLogin} loading={uiState.loading} />
   }
+
+  const totalCarrera = data.libros.filter(l => l.tipo === 'carrera' || !l.tipo).length
+  const totalTematicos = data.libros.filter(l => l.tipo === 'tematica').length
+  const totalLibros = data.libros.length
 
   return (
     <div className="min-h-screen bg-gray-50">
@@ -670,6 +792,9 @@ export default function App() {
                     {uiState.conflictCount} conflicto(s)
                   </span>
                 )}
+                <span className="text-xs opacity-75">
+                  {totalLibros} libros ({totalCarrera} carrera, {totalTematicos} temáticos)
+                </span>
                 {data.metadata.lastSyncTime && (
                   <span className="text-xs opacity-75">
                     {new Date(data.metadata.lastSyncTime).toLocaleTimeString()}
@@ -690,7 +815,6 @@ export default function App() {
                 </button>
               )}
 
-              {/* CHECKBOX: Mostrar materias vacías */}
               <label className="flex items-center gap-2 text-white text-sm cursor-pointer hover:bg-white hover:bg-opacity-10 px-3 py-2 rounded-lg transition-colors">
                 <input
                   type="checkbox"
@@ -703,14 +827,28 @@ export default function App() {
 
               <button
                 onClick={() => {
+                  setModalTipo('carrera')
                   setModalOpen(true)
                   setEditingLibro(null)
                 }}
                 disabled={uiState.loading || uiState.saving || uiState.syncing}
                 className="bg-white text-primary-600 hover:bg-gray-100 px-4 py-2 rounded-lg font-semibold flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
               >
-                <Plus className="w-5 h-5" />
+                <Book className="w-4 h-4" />
                 Agregar Libro
+              </button>
+
+              <button
+                onClick={() => {
+                  setModalTipo('tematica')
+                  setModalOpen(true)
+                  setEditingLibro(null)
+                }}
+                disabled={uiState.loading || uiState.saving || uiState.syncing}
+                className="bg-white text-purple-600 hover:bg-gray-100 px-4 py-2 rounded-lg font-semibold flex items-center gap-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <Grid className="w-4 h-4" />
+                Agregar Temático
               </button>
 
               <button
@@ -828,7 +966,10 @@ export default function App() {
           onSearchChange={setSearchTerm}
           selectedMateria={selectedMateria}
           onMateriaChange={setSelectedMateria}
+          selectedTematica={selectedTematica}
+          onTematicaChange={setSelectedTematica}
           materias={data.materias}
+          tematicas={data.tematicas}
         />
 
         {uiState.loading && (
@@ -840,49 +981,135 @@ export default function App() {
           </div>
         )}
 
-        {!uiState.loading && librosFiltered.length === 0 && data.libros.length > 0 && (
+        {/* ============================================ */}
+        {/* BLOQUE DE MATERIAS (CARRERA) */}
+        {/* ============================================ */}
+        
+        {!uiState.loading && librosCarrera.length > 0 && (
+          <>
+            <div className="flex items-center gap-2 mb-4">
+              <Book className="w-5 h-5 text-primary-600" />
+              <h2 className="text-xl font-bold text-gray-800">Materias de Carrera</h2>
+              <span className="text-sm text-gray-500">({librosCarrera.length} libros)</span>
+            </div>
+            
+            {materiasAMostrar.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
+                {materiasAMostrar.map(materia => (
+                  <MateriaCard
+                    key={materia.id}
+                    materia={materia}
+                    libros={librosPorMateria[materia.id] || []}
+                    onEditLibro={(libro) => {
+                      setEditingLibro(libro)
+                      setModalTipo('carrera')
+                      setModalOpen(true)
+                    }}
+                    onDeleteLibro={handleDeleteLibro}
+                    loading={uiState.loading || uiState.saving}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg mb-8">
+                <p>No hay materias con libros que coincidan con tu búsqueda</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ============================================ */}
+        {/* BLOQUE DE TEMÁTICAS */}
+        {/* ============================================ */}
+        
+        {!uiState.loading && librosTematicos.length > 0 && (
+          <>
+            <div className="flex items-center gap-2 mb-4 mt-6">
+              <Grid className="w-5 h-5 text-purple-600" />
+              <h2 className="text-xl font-bold text-gray-800">Temáticas</h2>
+              <span className="text-sm text-gray-500">({librosTematicos.length} libros)</span>
+            </div>
+            
+            {tematicasAMostrar.length > 0 ? (
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {tematicasAMostrar.map(tematica => (
+                  <TematicaCard
+                    key={tematica.id}
+                    tematica={tematica}
+                    libros={librosPorTematica[tematica.id] || []}
+                    onEditLibro={(libro) => {
+                      setEditingLibro(libro)
+                      setModalTipo('tematica')
+                      setModalOpen(true)
+                    }}
+                    onDeleteLibro={handleDeleteLibro}
+                    loading={uiState.loading || uiState.saving}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
+                <p>No hay temáticas con libros que coincidan con tu búsqueda</p>
+              </div>
+            )}
+          </>
+        )}
+
+        {/* ============================================ */}
+        {/* MENSAJES CUANDO NO HAY LIBROS */}
+        {/* ============================================ */}
+        
+        {!uiState.loading && data.libros.length === 0 && (
+          <div className="text-center py-12">
+            <BookOpen className="w-16 h-16 text-gray-300 mx-auto mb-4" />
+            <p className="text-gray-500 text-lg font-medium">Tu biblioteca está vacía</p>
+            <p className="text-gray-400 text-sm mt-2 mb-6">Agrega tu primer libro para comenzar</p>
+            <div className="flex gap-4 justify-center">
+              <button
+                onClick={() => {
+                  setModalTipo('carrera')
+                  setModalOpen(true)
+                  setEditingLibro(null)
+                }}
+                className="bg-primary-600 text-white px-6 py-2 rounded-lg hover:bg-primary-700 font-semibold transition-colors flex items-center gap-2"
+              >
+                <Book className="w-4 h-4" />
+                Agregar libro de carrera
+              </button>
+              <button
+                onClick={() => {
+                  setModalTipo('tematica')
+                  setModalOpen(true)
+                  setEditingLibro(null)
+                }}
+                className="bg-purple-600 text-white px-6 py-2 rounded-lg hover:bg-purple-700 font-semibold transition-colors flex items-center gap-2"
+              >
+                <Grid className="w-4 h-4" />
+                Agregar libro temático
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Cuando hay libros pero no hay resultados de búsqueda */}
+        {!uiState.loading && data.libros.length > 0 && librosFiltered.length === 0 && (
           <div className="text-center py-12">
             <p className="text-gray-500 text-lg">No se encontraron libros</p>
             <p className="text-gray-400 text-sm mt-2">Intenta con otros términos de búsqueda</p>
           </div>
         )}
 
-        {!uiState.loading && librosFiltered.length > 0 && materiasAMostrar.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {materiasAMostrar.map(materia => (
-              <MateriaCard
-                key={materia.id}
-                materia={materia}
-                libros={librosPorMateriaFiltrados[materia.id] || []}
-                onEditLibro={(libro) => {
-                  setEditingLibro(libro)
-                  setModalOpen(true)
-                }}
-                onDeleteLibro={handleDeleteLibro}
-                loading={uiState.loading || uiState.saving}
-              />
-            ))}
+        {/* Cuando hay libros de carrera pero no temáticos */}
+        {!uiState.loading && librosCarrera.length === 0 && librosTematicos.length > 0 && (
+          <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg mb-8">
+            <p>No hay libros de carrera aún. Agrega uno desde el botón <strong>"Agregar Libro"</strong></p>
           </div>
         )}
-
-        {!uiState.loading && data.libros.length > 0 && materiasAMostrar.length === 0 && (
-          <div className="text-center py-12">
-            <p className="text-gray-500 text-lg">No hay materias con libros</p>
-            <p className="text-gray-400 text-sm mt-2">Agrega libros para empezar a verlas</p>
-          </div>
-        )}
-
-        {!uiState.loading && data.libros.length === 0 && (
-          <div className="text-center py-12">
-            <BookOpen className="w-16 h-16 text-gray-300 mx-auto mb-4" />
-            <p className="text-gray-500 text-lg font-medium">Tu biblioteca está vacía</p>
-            <p className="text-gray-400 text-sm mt-2 mb-6">Agrega tu primer libro para comenzar</p>
-            <button
-              onClick={() => setModalOpen(true)}
-              className="bg-primary-600 text-white px-6 py-2 rounded-lg hover:bg-primary-700 font-semibold transition-colors"
-            >
-              Agregar primer libro
-            </button>
+        
+        {/* Cuando hay libros temáticos pero no de carrera */}
+        {!uiState.loading && librosTematicos.length === 0 && librosCarrera.length > 0 && (
+          <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-lg">
+            <p>No hay libros temáticos aún. Agrega uno desde el botón <strong>"Agregar Temático"</strong></p>
           </div>
         )}
       </main>
@@ -896,6 +1123,7 @@ export default function App() {
         onSave={handleSaveLibro}
         libro={editingLibro}
         materias={data.materias}
+        tipo={modalTipo}
         loading={uiState.loading || uiState.saving}
       />
     </div>

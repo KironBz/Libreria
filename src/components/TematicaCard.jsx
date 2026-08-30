@@ -1,62 +1,52 @@
-import { ExternalLink, Edit2, Trash2, BookOpen } from 'lucide-react'
+import { ExternalLink, Edit2, Trash2, BookOpen, Grid } from 'lucide-react'
 
-export default function MateriaCard({ 
-  materia, 
+export default function TematicaCard({ 
+  tematica, 
   libros, 
   onEditLibro, 
   onDeleteLibro,
   loading
 }) {
-  // 🔍 LOG: Ver qué recibe
-  console.log(`[MateriaCard] Renderizando ${materia.nombre} - Recibe ${libros?.length || 0} libros`)
-  if (libros && libros.length > 0) {
-    console.log(`[MateriaCard] Libros en ${materia.nombre}:`, libros.map(l => l.titulo))
-  }
-  
-  // CORREGIDO: Usar 'materias' (array) en lugar de 'materia' (string)
-  // Los libros ahora guardan 'materias' como array
-  const librosEnMateria = (libros || []).filter(l => 
-    l.materias && l.materias.includes(materia.nombre)
+  const librosEnTematica = (libros || []).filter(l => 
+    l.tematicas && l.tematicas.includes(tematica.nombre)
   )
-  
-  console.log(`[MateriaCard] ${materia.nombre} - Filtrados: ${librosEnMateria.length}`)
 
   const handleDelete = (libro) => {
-    console.log('[MateriaCard] Intentando eliminar:', libro.titulo, libro.id)
+    console.log('[TematicaCard] Intentando eliminar:', libro.titulo, libro.id)
     
     const confirmado = window.confirm(`¿Eliminar "${libro.titulo}"?`)
     
     if (confirmado) {
-      console.log('[MateriaCard] Confirmado, llamando a onDeleteLibro')
+      console.log('[TematicaCard] Confirmado, llamando a onDeleteLibro')
       onDeleteLibro(libro.id)
     } else {
-      console.log('[MateriaCard] Eliminación cancelada')
+      console.log('[TematicaCard] Eliminación cancelada')
     }
   }
 
   return (
-    <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow overflow-hidden">
+    <div className="bg-white rounded-lg shadow-md hover:shadow-lg transition-shadow overflow-hidden border-t-4 border-purple-500">
       {/* Header */}
-      <div className="bg-gradient-to-r from-primary-600 to-secondary-600 text-white px-6 py-4">
-        <h3 className="text-lg font-semibold">
-          <span className="opacity-75 text-sm font-mono mr-2">{materia.id}</span>
-          {materia.nombre}
+      <div className="bg-gradient-to-r from-purple-600 to-purple-700 text-white px-6 py-4">
+        <h3 className="text-lg font-semibold flex items-center gap-2">
+          <span className="text-xl">{tematica.icono || '📖'}</span>
+          {tematica.nombre}
         </h3>
         <p className="text-xs opacity-75 mt-1">
-          {librosEnMateria.length} {librosEnMateria.length === 1 ? 'libro' : 'libros'}
+          {librosEnTematica.length} {librosEnTematica.length === 1 ? 'libro' : 'libros'}
         </p>
       </div>
 
       {/* Content */}
       <div className="p-4">
-        {librosEnMateria.length === 0 ? (
+        {librosEnTematica.length === 0 ? (
           <div className="text-center py-8 text-gray-400">
             <BookOpen className="w-12 h-12 mx-auto mb-2 opacity-50" />
             <p className="text-sm">Sin libros asignados</p>
           </div>
         ) : (
           <div className="space-y-3">
-            {librosEnMateria.map(libro => (
+            {librosEnTematica.map(libro => (
               <div 
                 key={libro.id}
                 className="bg-gray-50 rounded-lg p-3 hover:bg-gray-100 transition-colors group"
@@ -69,7 +59,7 @@ export default function MateriaCard({
                         href={libro.url_drive}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="text-primary-600 hover:text-primary-700 font-semibold text-sm flex items-center gap-1 group/link mb-1"
+                        className="text-purple-600 hover:text-purple-700 font-semibold text-sm flex items-center gap-1 group/link mb-1"
                       >
                         <span className="truncate">{libro.titulo}</span>
                         <ExternalLink className="w-3 h-3 flex-shrink-0 opacity-0 group-hover/link:opacity-100 transition-opacity" />
@@ -87,10 +77,11 @@ export default function MateriaCard({
                         {libro.año && <span className="opacity-75 ml-2">({libro.año})</span>}
                       </p>
 
-                      {/* Materias asignadas */}
-                      {libro.materias && libro.materias.length > 0 && (
+                      {/* Editorial si existe */}
+                      {libro.editorial && (
                         <p className="text-gray-500">
-                          📚 {libro.materias.join(', ')}
+                          {libro.editorial}
+                          {libro.edicion && <span className="ml-1">• {libro.edicion} ed.</span>}
                         </p>
                       )}
 
@@ -102,9 +93,12 @@ export default function MateriaCard({
                         </p>
                       )}
 
-                      {/* ID Badge */}
-                      <div className="pt-1">
-                        <span className="inline-block bg-primary-100 text-primary-700 px-2 py-0.5 rounded text-xs font-mono font-semibold">
+                      {/* Badge de tipo y ID */}
+                      <div className="pt-1 flex gap-2 flex-wrap">
+                        <span className="inline-block bg-purple-100 text-purple-700 px-2 py-0.5 rounded text-xs font-medium">
+                          📖 Temático
+                        </span>
+                        <span className="inline-block bg-gray-100 text-gray-600 px-2 py-0.5 rounded text-xs font-mono">
                           #{libro.id}
                         </span>
                       </div>
@@ -116,7 +110,7 @@ export default function MateriaCard({
                     <button
                       onClick={() => onEditLibro(libro)}
                       disabled={loading}
-                      className="p-2 text-gray-500 hover:text-primary-600 hover:bg-primary-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                      className="p-2 text-gray-500 hover:text-purple-600 hover:bg-purple-50 rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                       title="Editar"
                     >
                       <Edit2 className="w-4 h-4" />

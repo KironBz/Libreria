@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
-import { X, AlertCircle, Search, Book, Hash, Calendar, Building, Tag, Layers, FileText } from 'lucide-react'
+import { X, AlertCircle, Search, Book, Hash, Calendar, Building, Tag, Layers, FileText, Plus, BookOpen, Grid } from 'lucide-react'
+import githubService from '../services/githubService'
 
 export default function LibroModal({ 
   isOpen, 
@@ -7,7 +8,8 @@ export default function LibroModal({
   onSave, 
   libro, 
   materias,
-  loading: externalLoading
+  loading: externalLoading,
+  tipo = 'carrera'
 }) {
   // Estados del formulario
   const [formData, setFormData] = useState({
@@ -21,9 +23,11 @@ export default function LibroModal({
     paginas: '',
     url_drive: '',
     materias: [],
+    tematicas: [],
     semestre: '',
     palabras_clave: '',
-    notas: ''
+    notas: '',
+    tipo: 'carrera'
   })
   const [errors, setErrors] = useState({})
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -31,9 +35,16 @@ export default function LibroModal({
   const submitLockRef = useRef(false)
   const loading = externalLoading || isSubmitting
 
+  // Obtener temáticas del servicio
+  const tematicasDisponibles = useMemo(() => {
+    return githubService.getTematicas() || []
+  }, [])
+
+  // Resetear formulario al abrir/cerrar
   useEffect(() => {
     if (isOpen) {
       if (libro) {
+        // Edición: cargar datos del libro
         setFormData({
           id: libro.id || '',
           titulo: libro.titulo || '',
@@ -45,11 +56,14 @@ export default function LibroModal({
           paginas: libro.paginas || '',
           url_drive: libro.url_drive || '',
           materias: libro.materias || [],
+          tematicas: libro.tematicas || [],
           semestre: libro.semestre || '',
           palabras_clave: libro.palabras_clave || '',
-          notas: libro.notas || ''
+          notas: libro.notas || '',
+          tipo: libro.tipo || 'carrera'
         })
       } else {
+        // Nuevo: generar ID automático
         setFormData({
           id: crypto.randomUUID().substring(0, 8),
           titulo: '',
@@ -61,16 +75,18 @@ export default function LibroModal({
           paginas: '',
           url_drive: '',
           materias: [],
+          tematicas: [],
           semestre: '',
           palabras_clave: '',
-          notas: ''
+          notas: '',
+          tipo: tipo || 'carrera'
         })
       }
       setErrors({})
       submitLockRef.current = false
       setIsSubmitting(false)
     }
-  }, [libro, isOpen])
+  }, [libro, isOpen, tipo])
 
   const handleChange = useCallback((e) => {
     const { name, value } = e.target
@@ -91,6 +107,7 @@ export default function LibroModal({
     }
   }, [errors])
 
+  // CORREGIDO: Manejo de materias con logs
   const handleMateriaToggle = useCallback((materiaNombre) => {
     setFormData(prev => {
       const currentMaterias = prev.materias || []
@@ -103,6 +120,8 @@ export default function LibroModal({
         newMaterias = [...currentMaterias, materiaNombre]
       }
       
+      console.log('[LibroModal] Materias seleccionadas:', newMaterias)
+      
       if (errors.materias && newMaterias.length > 0) {
         setErrors(prev => ({ ...prev, materias: null }))
       }
@@ -111,8 +130,34 @@ export default function LibroModal({
     })
   }, [errors.materias])
 
+  const handleTematicaToggle = useCallback((tematicaNombre) => {
+    setFormData(prev => {
+      const currentTematicas = prev.tematicas || []
+      const exists = currentTematicas.includes(tematicaNombre)
+      
+      let newTematicas
+      if (exists) {
+        newTematicas = currentTematicas.filter(t => t !== tematicaNombre)
+      } else {
+        newTematicas = [...currentTematicas, tematicaNombre]
+      }
+      
+      console.log('[LibroModal] Temáticas seleccionadas:', newTematicas)
+      
+      if (errors.tematicas && newTematicas.length > 0) {
+        setErrors(prev => ({ ...prev, tematicas: null }))
+      }
+      
+      return { ...prev, tematicas: newTematicas }
+    })
+  }, [errors.tematicas])
+
+  // CORREGIDO: Validación con logs
   const validate = useCallback(() => {
     const newErrors = {}
+    
+    console.log('[LibroModal] Validando formulario...')
+    console.log('[LibroModal] Datos:', formData)
     
     if (!formData.titulo?.trim()) {
       newErrors.titulo = 'El título es requerido'
@@ -126,16 +171,28 @@ export default function LibroModal({
       newErrors.autor = 'El autor debe tener al menos 2 caracteres'
     }
     
-    if (!formData.materias || formData.materias.length === 0) {
-      newErrors.materias = 'Selecciona al menos una materia'
+    if (!formData.url_drive?.trim()) {
+      newErrors.url_drive = 'El link de Drive es obligatorio'
+    } else if (!isValidUrl(formData.url_drive)) {
+      newErrors.url_drive = 'URL inválida (ej: https://drive.google.com/...)'
+    }
+    
+    // Validación según tipo
+    if (formData.tipo === 'carrera') {
+      if (!formData.materias || formData.materias.length === 0) {
+        newErrors.materias = 'Selecciona al menos una materia'
+        console.log('[LibroModal] ❌ Error: No hay materias seleccionadas')
+      } else {
+        console.log('[LibroModal] ✅ Materias seleccionadas:', formData.materias)
+      }
+    } else {
+      if (!formData.tematicas || formData.tematicas.length === 0) {
+        newErrors.tematicas = 'Selecciona al menos una temática'
+      }
     }
     
     if (formData.isbn && !/^[0-9]{10}|[0-9]{13}$/.test(formData.isbn.replace(/-/g, ''))) {
       newErrors.isbn = 'ISBN inválido (debe ser 10 o 13 dígitos)'
-    }
-    
-    if (formData.url_drive && !isValidUrl(formData.url_drive)) {
-      newErrors.url_drive = 'URL inválida (ej: https://drive.google.com/...)'
     }
     
     if (formData.año) {
@@ -160,9 +217,12 @@ export default function LibroModal({
     }
     
     setErrors(newErrors)
-    return Object.keys(newErrors).length === 0
+    const isValid = Object.keys(newErrors).length === 0
+    console.log('[LibroModal] Validación:', isValid ? '✅ Exitosa' : '❌ Falló', newErrors)
+    return isValid
   }, [formData])
 
+  // CORREGIDO: Envío con logs
   const handleSubmit = useCallback(async (e) => {
     e.preventDefault()
     
@@ -174,6 +234,9 @@ export default function LibroModal({
     setIsSubmitting(true)
     
     try {
+      console.log('[LibroModal] Preparando datos para guardar...')
+      console.log('[LibroModal] formData.materias:', formData.materias)
+      
       const dataToSave = {
         id: formData.id,
         titulo: formData.titulo.trim(),
@@ -184,19 +247,25 @@ export default function LibroModal({
         año: parseInt(formData.año) || new Date().getFullYear(),
         paginas: parseInt(formData.paginas) || '',
         url_drive: formData.url_drive?.trim() || '',
-        materias: formData.materias || [],
-        semestre: parseInt(formData.semestre) || '',
+        materias: formData.tipo === 'carrera' ? formData.materias : [],
+        tematicas: formData.tipo === 'tematica' ? formData.tematicas : [],
+        semestre: formData.tipo === 'carrera' ? (parseInt(formData.semestre) || '') : '',
         palabras_clave: formData.palabras_clave?.trim() || '',
-        notas: formData.notas?.trim() || ''
+        notas: formData.notas?.trim() || '',
+        tipo: formData.tipo
       }
       
+      console.log('[LibroModal] 📦 Datos a guardar:', dataToSave)
+      
       await onSave(dataToSave)
+      
+      console.log('[LibroModal] ✅ Libro guardado exitosamente')
       
       submitLockRef.current = false
       setIsSubmitting(false)
       
     } catch (err) {
-      console.error('[LibroModal] Error guardando:', err)
+      console.error('[LibroModal] ❌ Error guardando:', err)
       submitLockRef.current = false
       setIsSubmitting(false)
       setErrors(prev => ({
@@ -216,6 +285,7 @@ export default function LibroModal({
   }
 
   const [searchMateria, setSearchMateria] = useState('')
+  const [searchTematica, setSearchTematica] = useState('')
   
   const materiasFiltradas = useMemo(() => {
     if (!searchMateria.trim()) return materias || []
@@ -225,6 +295,15 @@ export default function LibroModal({
       m.id.toString().includes(search)
     )
   }, [materias, searchMateria])
+
+  const tematicasFiltradas = useMemo(() => {
+    if (!searchTematica.trim()) return tematicasDisponibles || []
+    const search = searchTematica.toLowerCase()
+    return (tematicasDisponibles || []).filter(t => 
+      t.nombre.toLowerCase().includes(search) ||
+      t.id.toString().includes(search)
+    )
+  }, [tematicasDisponibles, searchTematica])
 
   const semestres = [
     { id: 1, nombre: '1er Semestre' },
@@ -241,21 +320,20 @@ export default function LibroModal({
 
   if (!isOpen) return null
 
+  const esCarrera = formData.tipo === 'carrera'
+  const tituloModal = libro 
+    ? (esCarrera ? '✏️ Editar Libro de Carrera' : '✏️ Editar Libro Temático')
+    : (esCarrera ? '📚 Agregar Nuevo Libro de Carrera' : '📖 Agregar Nuevo Libro Temático')
+
   return (
-    // ============================================
-    // CONTENEDOR PRINCIPAL - CORREGIDO
-    // - max-h-[95vh]: Altura máxima 95% de la pantalla
-    // - flex flex-col: Para que header sea fijo y form scrollable
-    // - max-w-4xl: Más ancho en horizontal
-    // ============================================
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
       <div className="bg-white rounded-lg shadow-xl max-w-4xl w-full max-h-[95vh] flex flex-col">
         
-        {/* Header - Fijo (no scroll) */}
+        {/* Header */}
         <div className="flex items-center justify-between bg-gradient-to-r from-primary-600 to-secondary-600 text-white px-6 py-4 rounded-t-lg flex-shrink-0">
           <h2 className="text-xl font-bold flex items-center gap-2">
-            <Book className="w-6 h-6" />
-            {libro ? '✏️ Editar Libro' : '📚 Agregar Nuevo Libro'}
+            {esCarrera ? <Book className="w-6 h-6" /> : <BookOpen className="w-6 h-6" />}
+            {tituloModal}
           </h2>
           <button
             onClick={onClose}
@@ -266,7 +344,7 @@ export default function LibroModal({
           </button>
         </div>
 
-        {/* Form - Scrollable */}
+        {/* Form */}
         <form onSubmit={handleSubmit} className="p-6 space-y-5 overflow-y-auto flex-1">
           
           {/* Error general de envío */}
@@ -276,6 +354,24 @@ export default function LibroModal({
               <p className="text-sm text-red-700">{errors.submit}</p>
             </div>
           )}
+
+          {/* Indicador de tipo */}
+          <div className="flex items-center gap-2 text-sm text-gray-500 bg-gray-50 p-2 rounded-lg">
+            <span className="font-medium">Tipo:</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${esCarrera ? 'bg-blue-100 text-blue-700' : 'bg-purple-100 text-purple-700'}`}>
+              {esCarrera ? '📚 Carrera' : '📖 Temático'}
+            </span>
+            {esCarrera && (
+              <span className="text-xs text-gray-400 ml-2">
+                (Libros de las 55 materias de la carrera)
+              </span>
+            )}
+            {!esCarrera && (
+              <span className="text-xs text-gray-400 ml-2">
+                (Libros de humanidades, hábitos, etc.)
+              </span>
+            )}
+          </div>
 
           {/* ============================================ */}
           {/* SECCIÓN 1: IDENTIFICACIÓN BÁSICA */}
@@ -307,7 +403,7 @@ export default function LibroModal({
                 name="titulo"
                 value={formData.titulo}
                 onChange={handleChange}
-                placeholder="Ej: Cálculo Diferencial e Integral"
+                placeholder={esCarrera ? "Ej: Cálculo Diferencial e Integral" : "Ej: Hábitos Atómicos"}
                 className={`w-full px-3 py-2 border rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none ${
                   errors.titulo ? 'border-red-500' : 'border-gray-300'
                 }`}
@@ -456,7 +552,7 @@ export default function LibroModal({
 
             <div className="md:col-span-2">
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                Link en Drive
+                Link en Drive *
               </label>
               <input
                 type="url"
@@ -473,15 +569,17 @@ export default function LibroModal({
                   <AlertCircle className="w-4 h-4" /> {errors.url_drive}
                 </p>
               )}
-              <p className="text-xs text-gray-500 mt-1">Opcional - Enlace al libro en Google Drive</p>
+              <p className="text-xs text-gray-500 mt-1">
+                <span className="text-red-500 font-medium">* Obligatorio</span> - Enlace al libro en Google Drive
+              </p>
             </div>
           </div>
 
           {/* ============================================ */}
-          {/* SECCIÓN 5: MATERIAS (MÚLTIPLE) Y SEMESTRE */}
+          {/* SECCIÓN 5: MATERIAS (solo carrera) - CORREGIDO */}
           {/* ============================================ */}
           
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          {esCarrera && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-3">
                 Materias donde aplica *
@@ -505,9 +603,9 @@ export default function LibroModal({
               )}
 
               <div className="text-xs text-gray-500 mb-2">
-                {formData.materias.length > 0 ? (
+                {formData.materias && formData.materias.length > 0 ? (
                   <span className="text-primary-600 font-medium">
-                    {formData.materias.length} materia(s) seleccionada(s)
+                    {formData.materias.length} materia(s) seleccionada(s): {formData.materias.join(', ')}
                   </span>
                 ) : (
                   <span>Selecciona una o más materias</span>
@@ -524,18 +622,18 @@ export default function LibroModal({
                     <label 
                       key={materia.id} 
                       className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors text-sm ${
-                        formData.materias.includes(materia.nombre)
+                        formData.materias && formData.materias.includes(materia.nombre)
                           ? 'bg-primary-50 border-primary-200' 
                           : 'hover:bg-gray-50'
                       } border ${
-                        formData.materias.includes(materia.nombre)
+                        formData.materias && formData.materias.includes(materia.nombre)
                           ? 'border-primary-300' 
                           : 'border-transparent'
                       }`}
                     >
                       <input
                         type="checkbox"
-                        checked={formData.materias.includes(materia.nombre)}
+                        checked={formData.materias && formData.materias.includes(materia.nombre)}
                         onChange={() => handleMateriaToggle(materia.nombre)}
                         className="w-4 h-4 text-primary-600 rounded focus:ring-2 focus:ring-primary-500 flex-shrink-0"
                       />
@@ -548,7 +646,86 @@ export default function LibroModal({
               </div>
               <p className="text-xs text-gray-500 mt-1">Selecciona una o más materias para este libro</p>
             </div>
+          )}
 
+          {/* ============================================ */}
+          {/* SECCIÓN 5B: TEMÁTICAS (solo temático) */}
+          {/* ============================================ */}
+          
+          {!esCarrera && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                Temáticas donde aplica *
+              </label>
+              
+              <div className="relative mb-3">
+                <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 w-4 h-4 text-gray-400" />
+                <input
+                  type="text"
+                  placeholder="Buscar temática..."
+                  value={searchTematica}
+                  onChange={(e) => setSearchTematica(e.target.value)}
+                  className="w-full pl-9 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none"
+                />
+              </div>
+
+              {errors.tematicas && (
+                <p className="text-sm text-red-600 mb-3 flex items-center gap-1">
+                  <AlertCircle className="w-4 h-4" /> {errors.tematicas}
+                </p>
+              )}
+
+              <div className="text-xs text-gray-500 mb-2">
+                {formData.tematicas && formData.tematicas.length > 0 ? (
+                  <span className="text-purple-600 font-medium">
+                    {formData.tematicas.length} temática(s) seleccionada(s): {formData.tematicas.join(', ')}
+                  </span>
+                ) : (
+                  <span>Selecciona una o más temáticas</span>
+                )}
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 max-h-48 overflow-y-auto border border-gray-200 rounded-lg p-2">
+                {tematicasFiltradas.length === 0 ? (
+                  <div className="col-span-full text-center py-4 text-gray-500 text-sm">
+                    No se encontraron temáticas
+                  </div>
+                ) : (
+                  tematicasFiltradas.map(tematica => (
+                    <label 
+                      key={tematica.id} 
+                      className={`flex items-center gap-2 p-2 rounded cursor-pointer transition-colors text-sm ${
+                        formData.tematicas && formData.tematicas.includes(tematica.nombre)
+                          ? 'bg-purple-50 border-purple-200' 
+                          : 'hover:bg-gray-50'
+                      } border ${
+                        formData.tematicas && formData.tematicas.includes(tematica.nombre)
+                          ? 'border-purple-300' 
+                          : 'border-transparent'
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={formData.tematicas && formData.tematicas.includes(tematica.nombre)}
+                        onChange={() => handleTematicaToggle(tematica.nombre)}
+                        className="w-4 h-4 text-purple-600 rounded focus:ring-2 focus:ring-purple-500 flex-shrink-0"
+                      />
+                      <span className="truncate">
+                        <span className="font-medium text-gray-500">{tematica.icono}</span> {tematica.nombre}
+                      </span>
+                    </label>
+                  ))
+                )}
+              </div>
+              <p className="text-xs text-gray-500 mt-1">Selecciona una o más temáticas para este libro</p>
+            </div>
+          )}
+
+          {/* ============================================ */}
+          {/* SECCIÓN 6: SEMESTRE (solo carrera) */}
+          {/* ============================================ */}
+          
+          {esCarrera && (
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
                 Semestre recomendado
@@ -575,10 +752,10 @@ export default function LibroModal({
               )}
               <p className="text-xs text-gray-500 mt-1">Opcional - útil para planificación</p>
             </div>
-          </div>
+          )}
 
           {/* ============================================ */}
-          {/* SECCIÓN 6: PALABRAS CLAVE Y NOTAS */}
+          {/* SECCIÓN 7: PALABRAS CLAVE Y NOTAS */}
           {/* ============================================ */}
           
           <div>
@@ -604,7 +781,10 @@ export default function LibroModal({
               name="notas"
               value={formData.notas}
               onChange={handleChange}
-              placeholder="Ej: Excelente para límites y continuidad, recomendado por el Dr. Pérez..."
+              placeholder={esCarrera 
+                ? "Ej: Excelente para límites y continuidad, recomendado por el Dr. Pérez..."
+                : "Ej: Recomendado para todos los semestres, útil para desarrollar hábitos..."
+              }
               rows="3"
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-primary-500 focus:border-transparent outline-none resize-none"
             />

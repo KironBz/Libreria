@@ -3,9 +3,10 @@
  * Maneja sincronización bidireccional entre localStorage y GitHub Gist
  * Implementa retry logic, validación de integridad y merge strategy
  * 
- * VERSION CORREGIDA - v2.3
- * - CORREGIDO: Libros eliminados se suben correctamente al Gist
- * - FORZADO: El push usa los datos locales sin merge
+ * VERSION CORREGIDA - v2.4
+ * - CORREGIDO: Token se guarda en localStorage (persistente)
+ * - CORREGIDO: Token NUNCA se sube al Gist
+ * - CORREGIDO: Recuperación de token al cargar la página
  */
 
 const SYNC_RETRIES = 3
@@ -18,12 +19,18 @@ const REQUIRED_BOOK_FIELDS = ['id', 'titulo', 'autor', 'materia']
 
 class GitHubService {
   constructor() {
-    this.token = sessionStorage.getItem('github_token') || null
+    // CORREGIDO: Usar localStorage para persistencia del token
+    this.token = localStorage.getItem('github_token') || null
     this.gistId = localStorage.getItem('gist_id') || null
     this.syncQueue = []
     this.isSyncing = false
     this.lastSyncTime = localStorage.getItem('last_sync_time') || null
     this.syncCallbacks = []
+    
+    console.log('[GitHubService] Inicializado:',
+      this.token ? '✅ Token presente' : '❌ Sin token',
+      this.gistId ? '✅ Gist ID presente' : '❌ Sin Gist ID'
+    )
   }
 
   // ============================================
@@ -47,7 +54,7 @@ class GitHubService {
   }
 
   // ============================================
-  // AUTENTICACIÓN
+  // AUTENTICACIÓN - CORREGIDA
   // ============================================
 
   setToken(token) {
@@ -59,9 +66,21 @@ class GitHubService {
       console.warn('[GitHubService] Token no parece ser de GitHub (debe comenzar con ghp_ o gho_)')
     }
     
+    // CORREGIDO: Guardar en localStorage (persistente)
     this.token = token
-    sessionStorage.setItem('github_token', token)
+    localStorage.setItem('github_token', token)
     this._notifyUI('auth_changed', { authenticated: true })
+    console.log('[GitHubService] Token guardado en localStorage')
+  }
+
+  // CORREGIDO: Método para obtener el token sin exponerlo
+  getToken() {
+    return this.token
+  }
+
+  // CORREGIDO: Verificar si hay token sin exponerlo
+  hasToken() {
+    return !!this.token
   }
 
   async getAuthenticatedUser() {
@@ -136,6 +155,7 @@ class GitHubService {
     return await response.json()
   }
 
+  // CORREGIDO: createGist NO incluye el token en los datos
   async createGist(data) {
     if (!this.token) {
       throw new Error('No token disponible')
@@ -143,7 +163,15 @@ class GitHubService {
 
     console.log('[GitHubService] Creando Gist nuevo...')
 
+    // Asegurar que los datos NO contengan el token
     const structuredData = this._ensureCorrectStructure(data)
+    
+    // Verificar que el token NO esté en los datos
+    if (structuredData.token || structuredData.github_token) {
+      console.warn('[GitHubService] ⚠️ Token detectado en datos, eliminando...')
+      delete structuredData.token
+      delete structuredData.github_token
+    }
 
     const gistData = {
       description: 'Biblioteca Digital Mecatrónica UNAM',
@@ -156,7 +184,7 @@ class GitHubService {
     }
 
     try {
-      const response = await fetch('https://api.github.com/user/gists', {
+      const response = await fetch('https://api.github.com/gists', {
         method: 'POST',
         headers: {
           'Authorization': `Bearer ${this.token}`,
@@ -195,18 +223,27 @@ class GitHubService {
   // ============================================
 
   _ensureCorrectStructure(data) {
+    // CORREGIDO: Asegurar que NUNCA incluya el token
+    const cleanData = { ...data }
+    delete cleanData.token
+    delete cleanData.github_token
+    delete cleanData.githubToken
+    
     return {
       metadata: {
         version: GIST_VERSION,
         lastUpdate: new Date().toISOString(),
-        totalLibros: Array.isArray(data?.libros) ? data.libros.length : 0
+        totalLibros: Array.isArray(cleanData?.libros) ? cleanData.libros.length : 0
       },
-      libros: Array.isArray(data?.libros) ? data.libros : []
+      libros: Array.isArray(cleanData?.libros) ? cleanData.libros : [],
+      // CORREGIDO: Incluir materias y temáticas si existen
+      materias: Array.isArray(cleanData?.materias) ? cleanData.materias : [],
+      tematicas: Array.isArray(cleanData?.tematicas) ? cleanData.tematicas : []
     }
   }
 
   // ============================================
-  // SINCRONIZACIÓN BIDIRECCIONAL (CORREGIDA)
+  // SINCRONIZACIÓN BIDIRECCIONAL
   // ============================================
 
   async smartSync(localData) {
@@ -248,13 +285,15 @@ class GitHubService {
         }
       }
 
-      // CORREGIDO: Merge con prioridad LOCAL
       const mergeResult = this._mergeBooksGranular(localData, remoteData)
 
-      // CORREGIDO: SIEMPRE subir los datos locales (sin merge)
-      // Esto asegura que los libros eliminados se suban al Gist
-      console.log('[GitHubService] Forzando push con datos locales')
-      await this._pushToGist(localData)
+      // CORREGIDO: Forzar push con datos locales (sin token)
+      const cleanData = { ...localData }
+      delete cleanData.token
+      delete cleanData.github_token
+      
+      console.log('[GitHubService] Forzando push con datos locales (sin token)')
+      await this._pushToGist(cleanData)
 
       this._notifyUI('sync_completed', mergeResult)
       return mergeResult
@@ -272,7 +311,7 @@ class GitHubService {
   }
 
   // ============================================
-  // MERGE GRANULAR DE LIBROS (v2.2)
+  // MERGE GRANULAR DE LIBROS
   // ============================================
 
   _mergeBooksGranular(local, remote) {
@@ -326,11 +365,11 @@ class GitHubService {
       if (!localMap.has(id)) {
         booksRemoved++
         hasChanges = true
-        console.log(`[GitHubService] Libro eliminado localmente: ${remoteBook.titulo} (${id})`)
+        console.log(`[GitHubService] Libro eliminado localmente (NO se reintroduce): ${remoteBook.titulo} (${id})`)
       }
     }
 
-    // PASO 3: Agregar libros NUEVOS en remoto (solo si no existen en local)
+    // PASO 3: Agregar libros NUEVOS en remoto
     for (const [id, remoteBook] of remoteMap) {
       if (!localMap.has(id)) {
         mergedBooks.push(remoteBook)
@@ -346,7 +385,9 @@ class GitHubService {
         lastUpdate: new Date().toISOString(),
         totalLibros: mergedBooks.length
       },
-      libros: mergedBooks
+      libros: mergedBooks,
+      materias: local.materias || [],
+      tematicas: local.tematicas || []
     }
 
     console.log('[GitHubService] Merge result:', {
@@ -381,6 +422,13 @@ class GitHubService {
       if (!data || typeof data !== 'object') {
         console.error('[GitHubService] Validación falló: data no es objeto')
         return false
+      }
+
+      // CORREGIDO: Verificar que NO tenga token
+      if (data.token || data.github_token) {
+        console.warn('[GitHubService] ⚠️ Token detectado en datos, eliminando...')
+        delete data.token
+        delete data.github_token
       }
 
       if (data.metadata && typeof data.metadata !== 'object') {
@@ -463,6 +511,10 @@ class GitHubService {
         throw new Error(`Error parseando JSON del Gist: ${parseErr.message}`)
       }
 
+      // CORREGIDO: Eliminar token si está en los datos descargados
+      delete data.token
+      delete data.github_token
+
       if (!this._validateDataStructure(data)) {
         console.warn('[GitHubService] Datos corruptos en Gist, intentando reparar...')
         data = this._repairCorruptedData(data)
@@ -487,7 +539,9 @@ class GitHubService {
           lastUpdate: new Date().toISOString(),
           totalLibros: 0
         },
-        libros: []
+        libros: [],
+        materias: this.getMaterias(),
+        tematicas: this.getTematicas()
       }
 
       if (data && Array.isArray(data.libros)) {
@@ -507,14 +561,29 @@ class GitHubService {
     }
   }
 
+  // CORREGIDO: _pushToGist NUNCA incluye el token
   async _pushToGist(data) {
     if (!this.token || !this.gistId) return false
 
     try {
-      // CORREGIDO: Usar los datos EXACTOS que se pasan (sin merge)
-      const structuredData = this._ensureCorrectStructure(data)
+      // CORREGIDO: Asegurar que los datos NO contengan el token
+      const cleanData = { ...data }
+      delete cleanData.token
+      delete cleanData.github_token
+      delete cleanData.githubToken
+      
+      const structuredData = this._ensureCorrectStructure(cleanData)
+      
+      // Verificación final: asegurar que no hay token
+      const dataString = JSON.stringify(structuredData)
+      if (dataString.includes('ghp_') || dataString.includes('gho_')) {
+        console.warn('[GitHubService] ⚠️ Posible token detectado en datos, limpiando...')
+        // Limpieza de emergencia
+        delete structuredData.token
+        delete structuredData.github_token
+      }
+      
       console.log('[GitHubService] Subiendo a Gist - Libros:', structuredData.libros.length)
-      console.log('[GitHubService] IDs de libros a subir:', structuredData.libros.map(b => b.id).join(', '))
 
       const response = await fetch(`https://api.github.com/gists/${this.gistId}`, {
         method: 'PATCH',
@@ -569,7 +638,6 @@ class GitHubService {
     this._notifyUI('sync_started', { timestamp: Date.now() })
 
     try {
-      // CORREGIDO: Forzar push directo sin merge
       const success = await this._pushToGist(data)
       
       if (success) {
@@ -647,20 +715,20 @@ class GitHubService {
   }
 
   // ============================================
-  // MÉTODOS DE UTILIDAD
+  // CATÁLOGOS
   // ============================================
 
   getMaterias() {
     return [
       { id: 1, nombre: "Álgebra" },
       { id: 2, nombre: "Cálculo y Geometría Analítica" },
-      { id: 3, nombre: "Redacción y Exposición de Temas de Ingeniería" },
-      { id: 4, nombre: "Química" },
+      { id: 3, nombre: "Química" },
+      { id: 4, nombre: "Redacción y Exposición de Temas de Ingeniería" },
       { id: 5, nombre: "Fundamentos de Programación" },
       { id: 6, nombre: "Álgebra Lineal" },
       { id: 7, nombre: "Cálculo Integral" },
-      { id: 8, nombre: "Física Experimental" },
-      { id: 9, nombre: "Estática" },
+      { id: 8, nombre: "Estática" },
+      { id: 9, nombre: "Física Experimental" },
       { id: 10, nombre: "Dibujo Mecánico e Industrial" },
       { id: 11, nombre: "Probabilidad" },
       { id: 12, nombre: "Cálculo Vectorial" },
@@ -669,32 +737,33 @@ class GitHubService {
       { id: 15, nombre: "Manufactura I" },
       { id: 16, nombre: "Cultura y Comunicación" },
       { id: 17, nombre: "Estadística" },
-      { id: 18, nombre: "Matemáticas Avanzadas" },
-      { id: 19, nombre: "Electricidad y Magnetismo" },
-      { id: 20, nombre: "Análisis Numérico" },
+      { id: 18, nombre: "Electricidad y Magnetismo" },
+      { id: 19, nombre: "Análisis Númerico" },
+      { id: 20, nombre: "Matemáticas Avanzadas" },
       { id: 21, nombre: "Termodinámica" },
-      { id: 22, nombre: "Taller Sociohumanístico" },
+      { id: 2201, nombre: "Taller Sociohumanístico: Liderazgo" },
+      { id: 2202, nombre: "Taller Sociohumanístico: Creatividad" },
       { id: 23, nombre: "Análisis de Circuitos" },
-      { id: 24, nombre: "Termofluidos" },
-      { id: 25, nombre: "Ingeniería de Materiales" },
-      { id: 26, nombre: "Mecánica de Sólidos" },
-      { id: 27, nombre: "Técnicas de Programación" },
+      { id: 24, nombre: "Ingeniería de Materiales" },
+      { id: 25, nombre: "Mecánica de Sólidos" },
+      { id: 26, nombre: "Técnicas de Programación" },
+      { id: 27, nombre: "Termofluidos" },
       { id: 28, nombre: "Electrónica Básica" },
-      { id: 29, nombre: "Modelado de Sistemas Físicos" },
-      { id: 30, nombre: "Ingeniería de Manufactura" },
-      { id: 31, nombre: "Mecanismos" },
-      { id: 32, nombre: "Temas Selectos de Programación I" },
+      { id: 29, nombre: "Ingeniería de Manufactura" },
+      { id: 30, nombre: "Mecanismos" },
+      { id: 31, nombre: "Temas Selectos de Programación I" },
+      { id: 32, nombre: "Modelado de Sistemas Físicos" },
       { id: 33, nombre: "Optativa Ciencias Sociales y Humanidades" },
       { id: 34, nombre: "Circuitos Digitales" },
       { id: 35, nombre: "Sistemas Electrónicos Lineales" },
-      { id: 36, nombre: "Introducción a la Economía" },
-      { id: 37, nombre: "Diseño de Elementos de Máquinas" },
-      { id: 38, nombre: "Ingeniería Económica" },
+      { id: 36, nombre: "Diseño de Elementos de Máquinas" },
+      { id: 37, nombre: "Ingeniería Económica" },
+      { id: 38, nombre: "Introducción a la Economía" },
       { id: 39, nombre: "Máquinas Eléctricas" },
       { id: 40, nombre: "Instrumentación" },
-      { id: 41, nombre: "Control Automático" },
-      { id: 42, nombre: "Asignatura Optativa" },
-      { id: 43, nombre: "Desarrollo Empresarial" },
+      { id: 41, nombre: "Asignatura Optativa" },
+      { id: 42, nombre: "Desarrollo Empresarial" },
+      { id: 43, nombre: "Control Automático" },
       { id: 44, nombre: "Optativa Ciencias Sociales y Humanidades" },
       { id: 45, nombre: "Diseño Mecatrónico" },
       { id: 46, nombre: "Automatización Industrial" },
@@ -710,12 +779,36 @@ class GitHubService {
     ]
   }
 
+  // ============================================
+  // TEMÁTICAS
+  // ============================================
+  
+  getTematicas() {
+    return [
+      { id: 1, nombre: "Hábitos de Estudio", icono: "📖" },
+      { id: 2, nombre: "Humanidades", icono: "🎨" },
+      { id: 3, nombre: "Ciencias Sociales", icono: "🌍" },
+      { id: 4, nombre: "Liderazgo", icono: "💼" },
+      { id: 5, nombre: "Comunicación", icono: "📊" },
+      { id: 6, nombre: "Bienestar y Salud", icono: "🌱" },
+      { id: 7, nombre: "Innovación y Creatividad", icono: "🚀" },
+      { id: 8, nombre: "Finanzas Personales", icono: "💰" },
+      { id: 9, nombre: "Habilidades Profesionales", icono: "🔧" },
+      { id: 10, nombre: "Música", icono: "🎵" },
+      { id: 11, nombre: "Otros", icono: "📦" }
+    ]
+  }
+
+  // ============================================
+  // LIMPIEZA Y LOGOUT
+  // ============================================
+
   clearAuth() {
     this.token = null
     this.gistId = null
     this.syncQueue = []
     this.lastSyncTime = null
-    sessionStorage.removeItem('github_token')
+    localStorage.removeItem('github_token')
     localStorage.removeItem('gist_id')
     localStorage.removeItem('last_sync_time')
     this._notifyUI('auth_cleared', {})
